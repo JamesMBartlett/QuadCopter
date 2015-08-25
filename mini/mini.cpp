@@ -7,22 +7,10 @@ int cePin = 9;
 
 int buttonpressed;
 const double aspsb = 0.8; //accelsetpointscaleback
-const double pcgincr = .1;
-const double icgincr = .1;
-const double dcgincr = .01;
+double cgincr = 1;
 
-double px = 6.9; //.4//original 1.2 blue
-double ix = 0;//0.05;//0.35; //1//.5 blue
-double dx = 0;//.2; //.1//.5 blue
-double py = 1.3;//.4;//1.2 blue
-double iy = 0; //.8 blue
-double dy = 0;//0.2; // .3 blue
-double pz = 1;
-double iz = 0;
-double dz = 0;
-double pvert = 1;
-double ivert = 0;
-double dvert = 0;
+PIDs posPID;
+PIDs veloPID;
 
 ControlState state;
 
@@ -39,6 +27,14 @@ char pidcharchar(ControlState state){
 	}
 }
 
+char quancharchar(ControlState state){
+	switch(quanchar(state)){
+	case position: return 'P';
+	case velocity: return 'V';
+	default: return 'E';
+	}
+}
+
 char axischarchar(ControlState state){
 	switch(axischar(state)){
 	case x:    return 'x';
@@ -51,131 +47,250 @@ char axischarchar(ControlState state){
 
 void printgains(ControlState state){
 	Serial.print("[");
+	Serial.print(quancharchar(state));
 	Serial.print(axischarchar(state));
 	Serial.print(pidcharchar(state));
-	Serial.print("] x ");
-	Serial.print(px); Serial.print(" ");
-	Serial.print(ix); Serial.print(" ");
-	Serial.print(dx);
-	Serial.print(" y ");
-	Serial.print(py); Serial.print(" ");
-	Serial.print(iy); Serial.print(" ");
-	Serial.print(dy);
-	Serial.print(" z ");
-	Serial.print(pz); Serial.print(" ");
-	Serial.print(iz); Serial.print(" ");
-	Serial.print(dz);
-	Serial.print(" v ");
-	Serial.print(pvert); Serial.print(" ");
-	Serial.print(ivert); Serial.print(" ");
-	Serial.print(dvert);
+	Serial.print("] pos x ");
+	Serial.print(posPID.x.p); Serial.print(" ");
+	Serial.print(posPID.x.i); Serial.print(" ");
+	Serial.print(posPID.x.d);
+	Serial.print(" pos y ");
+	Serial.print(posPID.y.p); Serial.print(" ");
+	Serial.print(posPID.y.i); Serial.print(" ");
+	Serial.print(posPID.y.d);
+	Serial.print(" pos z ");
+	Serial.print(posPID.z.p); Serial.print(" ");
+	Serial.print(posPID.z.i); Serial.print(" ");
+	Serial.print(posPID.z.d);
+	Serial.print(" pos v ");
+	Serial.print(posPID.vert.p); Serial.print(" ");
+	Serial.print(posPID.vert.i); Serial.print(" ");
+	Serial.print(posPID.vert.d);
+	Serial.print(" velo x ");
+	Serial.print(veloPID.x.p); Serial.print(" ");
+	Serial.print(veloPID.x.i); Serial.print(" ");
+	Serial.print(veloPID.x.d);
+	Serial.print(" velo y ");
+	Serial.print(veloPID.y.p); Serial.print(" ");
+	Serial.print(veloPID.y.i); Serial.print(" ");
+	Serial.print(veloPID.y.d);
+	Serial.print(" velo z ");
+	Serial.print(veloPID.z.p); Serial.print(" ");
+	Serial.print(veloPID.z.i); Serial.print(" ");
+	Serial.print(veloPID.z.d);
 	Serial.println();
 }
 
 void saveCurrentGain(ControlState state){
-	switch(axischar(state)){
-	case x:
-		switch(pidchar(state)){
-		case p:
-			px = state.currentgain;
-			break;
-		case i:
-			ix = state.currentgain;
-			break;
-		case d:
-			dx = state.currentgain;
-			break;
-		}
-	break;
-	case y:
-		switch(pidchar(state)){
-		case p:
-			py = state.currentgain;
-			break;
-		case i:
-			iy = state.currentgain;
-			break;
-		case d:
-			dy = state.currentgain;
-			break;
-		}
-	break;
-	case z:
-		switch(pidchar(state)){
-		case p:
-			pz = state.currentgain;
-			break;
-		case i:
-			iz = state.currentgain;
-			break;
-		case d:
-			dz = state.currentgain;
-			break;
-		}
-	break;
-	case vert:
-		switch(pidchar(state)){
-		case p:
-			pvert = state.currentgain;
-			break;
-		case i:
-			ivert = state.currentgain;
-			break;
-		case d:
-			dvert = state.currentgain;
-			break;
-		}
-	break;
-	}
-}
-double getNewCurrentGain(ControlState state){
-	switch(axischar(state)){
+	switch(quanchar(state)){
+	case position:
+		switch(axischar(state)){
 		case x:
 			switch(pidchar(state)){
 			case p:
-				return px;
+				posPID.x.p = state.currentgain;
+				break;
 			case i:
-				return ix;
+				posPID.x.i = state.currentgain;
+				break;
 			case d:
-				return dx;
+				posPID.x.d = state.currentgain;
+				break;
 			}
 		break;
 		case y:
 			switch(pidchar(state)){
 			case p:
-				return py;
+				posPID.y.p = state.currentgain;
+				break;
 			case i:
-				return iy;
+				posPID.y.i = state.currentgain;
+				break;
 			case d:
-				return dy;
+				posPID.y.d = state.currentgain;
+				break;
 			}
 		break;
 		case z:
 			switch(pidchar(state)){
 			case p:
-				return pz;
+				posPID.z.p = state.currentgain;
+				break;
 			case i:
-				return iz;
+				posPID.z.i = state.currentgain;
+				break;
 			case d:
-				return dz;
+				posPID.z.d = state.currentgain;
+				break;
 			}
 		break;
 		case vert:
 			switch(pidchar(state)){
 			case p:
-				return pvert;
+				posPID.vert.p = state.currentgain;
+				break;
 			case i:
-				return ivert;
+				posPID.vert.i = state.currentgain;
+				break;
 			case d:
-				return dvert;
+				posPID.vert.d = state.currentgain;
+				break;
 			}
 		break;
 		}
+	break;
+	case velocity:
+		switch(axischar(state)){
+		case x:
+			switch(pidchar(state)){
+			case p:
+				veloPID.x.p = state.currentgain;
+				break;
+			case i:
+				veloPID.x.i = state.currentgain;
+				break;
+			case d:
+				veloPID.x.d = state.currentgain;
+				break;
+			}
+		break;
+		case y:
+			switch(pidchar(state)){
+			case p:
+				veloPID.y.p = state.currentgain;
+				break;
+			case i:
+				veloPID.y.i = state.currentgain;
+				break;
+			case d:
+				veloPID.y.d = state.currentgain;
+				break;
+			}
+		break;
+		case z:
+			switch(pidchar(state)){
+			case p:
+				veloPID.z.p = state.currentgain;
+				break;
+			case i:
+				veloPID.z.i = state.currentgain;
+				break;
+			case d:
+				veloPID.z.d = state.currentgain;
+				break;
+			}
+		break;
+		}
+	}
+}
+
+double getNewCurrentGain(ControlState state){
+	switch(quanchar(state)){
+	case position:
+		switch(axischar(state)){
+			case x:
+				switch(pidchar(state)){
+				case p:
+					return posPID.x.p;
+				case i:
+					return posPID.x.i;
+				case d:
+					return posPID.x.d;
+				}
+			break;
+			case y:
+				switch(pidchar(state)){
+				case p:
+					return posPID.y.p;
+				case i:
+					return posPID.y.i;
+				case d:
+					return posPID.y.d;
+				}
+			break;
+			case z:
+				switch(pidchar(state)){
+				case p:
+					return posPID.z.p;
+				case i:
+					return posPID.z.i;
+				case d:
+					return posPID.z.d;
+				}
+			break;
+			case vert:
+				switch(pidchar(state)){
+				case p:
+					return posPID.vert.p;
+				case i:
+					return posPID.vert.i;
+				case d:
+					return posPID.vert.d;
+				}
+			break;
+			}
+	case velocity:
+		switch(axischar(state)){
+			case x:
+				switch(pidchar(state)){
+				case p:
+					return veloPID.x.p;
+				case i:
+					return veloPID.x.i;
+				case d:
+					return veloPID.x.d;
+				}
+			break;
+			case y:
+				switch(pidchar(state)){
+				case p:
+					return veloPID.y.p;
+				case i:
+					return veloPID.y.i;
+				case d:
+					return veloPID.y.d;
+				}
+			break;
+			case z:
+				switch(pidchar(state)){
+				case p:
+					return veloPID.z.p;
+				case i:
+					return veloPID.z.i;
+				case d:
+					return veloPID.z.d;
+				}
+			break;
+			case vert:
+				switch(pidchar(state)){
+				case p:
+					return veloPID.vert.p;
+				case i:
+					return veloPID.vert.i;
+				case d:
+					return veloPID.vert.d;
+				}
+			break;
+			}
+	}
 	return 0;
 }
 
 void setup() {
-	state.currentgain = px;
+	posPID.x.p = 1; //.4//original 1.2 blue
+	posPID.x.i = 0;//0.05;//0.35; //1//.5 blue
+	posPID.x.d = 0;//.2; //.1//.5 blue
+	posPID.y.p = 1;//.4;//1.2 blue
+	posPID.y.i = 0; //.8 blue
+	posPID.y.d = 0;//0.2; // .3 blue
+	posPID.z.p = 1;
+	posPID.z.i = 0;
+	posPID.z.d = 0;
+	posPID.vert.p = 1;
+	posPID.vert.i = 0;
+	posPID.vert.d = 0;
+	veloPID.x.p = 1;
+	state.currentgain = veloPID.x.p;
 	state.turnOn = false;
 	state.vertaccelset = -20;
   Serial.begin(57600);
@@ -285,17 +400,7 @@ void loop() {
     		buttonpressed =  Serial.parseInt();
     		Serial.println(buttonpressed);
     		if((ind == 4 || ind == 6) && buttonpressed == 1){
-    			switch(pidchar(state)){
-    			case p:
-    				state.currentgain = state.currentgain + ((ind == 4) ? pcgincr : -pcgincr);
-    				break;
-    			case i:
-    				state.currentgain = state.currentgain + ((ind == 4) ? icgincr : -icgincr);
-    				break;
-    			case d:
-    				state.currentgain = state.currentgain + ((ind == 4) ? dcgincr : -dcgincr);
-    				break;
-    			}
+    			state.currentgain = state.currentgain + ((ind == 4) ? cgincr : -cgincr);
     			saveCurrentGain(state);
     		}else if(ind == 11){
     			state.turnOn = (buttonpressed == 1 ? true:false);
@@ -305,18 +410,25 @@ void loop() {
     			state.turnOn = false;
     			Serial.println("turnOn");
     			Serial.println(state.turnOn);
-    		}//else if(ind == 13 && buttonpressed == 1){
-    			//setprintDebug(state, true);
-    		else if(ind == 13 && buttonpressed == 0){
+    		}else if(ind == 13 && buttonpressed == 1){
+    			setprintDebug(state, true);
+    		}else if(ind == 13 && buttonpressed == 0){
     			setprintDebug(state, false);
     		}else if(ind == 14 && buttonpressed == 1){
     			saveCurrentGain(state);
     			incrementaxis(state);
     			state.currentgain = getNewCurrentGain(state);
-    		}else if(ind == 12 && buttonpressed == 1){
+    		}else if(ind == 15 && buttonpressed == 1){
+    			saveCurrentGain(state);
+    			incrementquantity(state);
+    			state.currentgain = getNewCurrentGain(state);
+    		}
+    		else if(ind == 12 && buttonpressed == 1){
     			saveCurrentGain(state);
     			incrementpid(state);
     			state.currentgain = getNewCurrentGain(state);
+    		}else if((ind == 5 || ind == 7) && buttonpressed == 1){
+    			cgincr *= ((ind==7)? 0.1 : 10);
     		}
     	}else{
     		Serial.println("Unknown Character");

@@ -9,7 +9,7 @@ int cePin = 8;
 int gyrorange = 1; // + or - .5
 double motormultiplier[4];
 
-const int sampTime = 2; //milliseconds
+const int sampTime = 16; //milliseconds
 int loopits;
 unsigned long starttime;
 
@@ -27,31 +27,21 @@ uint8_t fifoBuffer[64]; // FIFO storage buffer
 
 // orientation/motion vars
 Quaternion q;           // [w, x, y, z]         quaternion container
+Quaternion lastq;
 VectorInt16 aa;         // [x, y, z]            accel sensor measurements
 VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
 VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
 VectorFloat gravity;    // [x, y, z]            gravity vector
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-VectorInt16 gyro;       // [x, y, z]
+int32_t gyro[3];       // [x, y, z]
 
 int radioNumber = 1;
 RF24 radio(cePin,csnPin);
 
 
 byte addresses[][6] = {"1Node","2Node"};
-double xgyroin;
-double ygyroin;
-double zgyroin;
-double vertaccelin;
-double xgyroout = 0;
-double ygyroout = 0;
-double zgyroout;
-double vertaccelout = 0;
-double xsetpoint;
-double ysetpoint;
-double zsetpoint;
-double vertaccelset;
+
 double motorspeed[4];
 
 uint32_t m_z = 1;
@@ -65,31 +55,114 @@ uint32_t m_w = 1;
 // P_u is period of oscillation = 0.5s / 2.6ms = 192 sampling intervals
 // p = 0.6 * k_u, i = 2k_p / (P_u), d = (K_p * P_u )/ 8
 
+PIDs posPID;
+PIDs veloPID;
+
 double currentgain = .8;
-double px = 1; //.4//original 1.2 blue
-double ix = 0;//0.05;//0.35; //1//.5 blue
-double dx = .2; //.1//.5 blue
-//double dx = 0.5;
-double py = 1.3;//.4;//1.2 blue
-double iy = 0; //.8 blue
-double dy = 0.2; // .3 blue
-double pz = 1;
-double iz = 0;
-double dz = 0;
-double pvert = 1;
-double ivert = 0;
-double dvert = 0;
-bool gainchangeflag = false;
 
 unsigned long lasttime;
+unsigned long timesq;
+unsigned long ltime;
 
 const int hoversetpoint = 105;
 
+PID xPosControl(&posPID.x.input, &(posPID.x.output), &posPID.x.setpoint, posPID.x.p,posPID.x.i,posPID.x.d, DIRECT);
+PID yPosControl(&posPID.y.input, &posPID.y.output, &posPID.y.setpoint, posPID.y.p,posPID.y.i,posPID.y.d, DIRECT);
+PID zPosControl(&posPID.z.input, &posPID.z.output, &posPID.z.setpoint, posPID.z.p,posPID.z.i,posPID.z.d, DIRECT);
 
-PID xControl(&xgyroin, &xgyroout, &xsetpoint, px,ix,dx, DIRECT);
-PID yControl(&ygyroin, &ygyroout, &ysetpoint, py,iy,dy, DIRECT);
-PID zControl(&zgyroin, &zgyroout, &zsetpoint, pz, iz,dz, DIRECT);
-PID vertControl(&vertaccelin, &vertaccelout, &vertaccelset, pvert, ivert,dvert, DIRECT);
+PID xVeloControl(&veloPID.x.input, &(veloPID.x.output), &veloPID.x.setpoint, veloPID.x.p,veloPID.x.i,veloPID.x.d, DIRECT);
+PID yVeloControl(&veloPID.y.input, &veloPID.y.output, &veloPID.y.setpoint, veloPID.y.p,veloPID.y.i,veloPID.y.d, DIRECT);
+PID zVeloControl(&veloPID.z.input, &veloPID.z.output, &veloPID.z.setpoint, veloPID.z.p,veloPID.z.i,veloPID.z.d, DIRECT);
+
+PID vertControl(&posPID.vert.input, &posPID.vert.output, &posPID.vert.setpoint, posPID.vert.p,posPID.vert.i,posPID.vert.d, DIRECT);
+
+void PIDCompute(){
+	//possibly need to scale these back
+	veloPID.x.input = 100 * (q.x - lastq.x)/ double(sampTime);//double(gyro[0]) / 50000;
+	veloPID.y.input = 100 * (q.y - lastq.y) / double(sampTime);//double(gyro[1]) / 50000;
+	veloPID.z.input = 100 * (q.z - lastq.z) / double(sampTime);//double(gyro[2]) / 50000;
+	xPosControl.Compute();
+	yPosControl.Compute();
+	zPosControl.Compute();
+	if(xVeloControl.Compute()) lastq.x = q.x;
+	if(yVeloControl.Compute()) lastq.y = q.y;
+	if(zVeloControl.Compute()) lastq.z = q.z;
+	//vertControl.Compute();
+}
+
+void setPID(){
+	xPosControl.SetTunings(posPID.x.p, posPID.x.i, posPID.x.d);
+	yPosControl.SetTunings(posPID.y.p, posPID.y.i, posPID.y.d);
+	zPosControl.SetTunings(posPID.z.p, posPID.z.i, posPID.z.d);
+
+	xVeloControl.SetTunings(veloPID.x.p, veloPID.x.i, veloPID.x.d);
+	yVeloControl.SetTunings(veloPID.y.p, veloPID.y.i, veloPID.y.d);
+	zVeloControl.SetTunings(veloPID.z.p, veloPID.z.i, veloPID.z.d);
+
+	vertControl.SetTunings(posPID.vert.p, posPID.vert.i, posPID.vert.d);
+}
+char pidcharchar(ControlState state){
+	switch(pidchar(state)){
+	case p:	 return 'p';
+	case i:	 return 'i';
+	case d:  return 'd';
+	default: return 'B';
+	}
+}
+
+char quancharchar(ControlState state){
+	switch(quanchar(state)){
+	case position: return 'P';
+	case velocity: return 'V';
+	default: return 'E';
+	}
+}
+
+char axischarchar(ControlState state){
+	switch(axischar(state)){
+	case x:    return 'x';
+	case y:    return 'y';
+	case z:	   return 'z';
+	case vert: return 'v';
+	default:   return 'B';
+	}
+}
+
+void printgains(ControlState state){
+	Serial.print("[");
+	Serial.print(quancharchar(state));
+	Serial.print(axischarchar(state));
+	Serial.print(pidcharchar(state));
+	Serial.print("] pos x ");
+	Serial.print(posPID.x.p); Serial.print(" ");
+	Serial.print(posPID.x.i); Serial.print(" ");
+	Serial.print(posPID.x.d);
+	Serial.print(" pos y ");
+	Serial.print(posPID.y.p); Serial.print(" ");
+	Serial.print(posPID.y.i); Serial.print(" ");
+	Serial.print(posPID.y.d);
+	Serial.print(" pos z ");
+	Serial.print(posPID.z.p); Serial.print(" ");
+	Serial.print(posPID.z.i); Serial.print(" ");
+	Serial.print(posPID.z.d);
+	Serial.print(" pos v ");
+	Serial.print(posPID.vert.p); Serial.print(" ");
+	Serial.print(posPID.vert.i); Serial.print(" ");
+	Serial.print(posPID.vert.d);
+	Serial.print(" velo x ");
+	Serial.print(veloPID.x.p); Serial.print(" ");
+	Serial.print(veloPID.x.i); Serial.print(" ");
+	Serial.print(veloPID.x.d);
+	Serial.print(" velo y ");
+	Serial.print(veloPID.y.p); Serial.print(" ");
+	Serial.print(veloPID.y.i); Serial.print(" ");
+	Serial.print(veloPID.y.d);
+	Serial.print(" velo z ");
+	Serial.print(veloPID.z.p); Serial.print(" ");
+	Serial.print(veloPID.z.i); Serial.print(" ");
+	Serial.print(veloPID.z.d);
+	Serial.println();
+}
 
 uint32_t GetUint()
 {
@@ -118,12 +191,13 @@ int randRound(double x){
 // y axis runs from motor 1 and 2 side to motor 3 and 4 side, with a positive value being a rotation towards the motor 2 and 3 side.
 
 void gyroToMotor(double vaccel, double x, double y, double z, double motors[]){
-	motors[0] = vaccel / 100 + x + y + z;
-	motors[1] = vaccel / 100 + x - y - z;
-	motors[2] = vaccel / 100 - x - y + z;
-	motors[3] = vaccel / 100 - x + y - z;
+	motors[0] = vaccel / 100 + x + y + 0 * z;
+	motors[1] = vaccel / 100 + x - y - 0 * z;
+	motors[2] = vaccel / 100 - x - y + 0 * z;
+	motors[3] = vaccel / 100 - x + y - 0 * z;
 	for (int i=0; i<4; i++){
-		motors[i] = randRound(hoversetpoint + motors[i] * (hoversetpoint - 30) / 4); //scale
+		motors[i] = ((motors[i] > 1) ? 1 : ((motors[i] < -1) ? -1 : motors[i]));
+		motors[i] = randRound(hoversetpoint + motors[i] * (hoversetpoint - 30)); //scale
 	}
 
 }
@@ -133,8 +207,306 @@ void dmpDataReady() {
     mpuInterrupt = true;
 }
 
+void printDebugs(){
+		//			for(int i=0; i<4;i++){
+		//				state.pwmset[i] = motorspeed[i];
+		//			}
+	//				state.setretx = xsetpoint;
+	//				state.setrety = ysetpoint;
+	//				state.vertset = vertaccelset;
+	state.pwmoutx = veloPID.x.output;
+	state.pwmouty = veloPID.y.output;
+	state.pwmoutvert = posPID.vert.output;
+	Serial.println("still writing");
+	radio.stopListening();
+	radio.write(&state, sizeof(ControlState));
+	radio.startListening() ;
+}
+void updateMotors(){
+	gyroToMotor(posPID.vert.setpoint, veloPID.x.output, veloPID.y.output, veloPID.z.output, motorspeed);
+	for (int i=0; i<4; i++){
+		esc[i].write(motorspeed[i]); //* motormultiplier[i]);
+	}
+	PIDCompute();
+}
+void calcIterTimes(){
+	if(loopits == 0){
+		starttime = millis();
+		ltime = starttime;
+		timesq = 0;
+	}
+	loopits++;
+	unsigned long now = millis();
+	timesq += sq(now - ltime);
+	ltime = now;
+}
+
+void printIterTimes(){
+	if(loopits!= 0){
+		unsigned long time = millis() - starttime;
+		float meanperiod = float(time) / float(loopits);
+		Serial.println();
+		Serial.print("Iterations: ");
+		Serial.print(loopits);
+		Serial.print("\t");
+		Serial.print("Time in ms: ");
+		Serial.print(time);
+		Serial.print("\t");
+		Serial.print("frequency (Hz): ");
+		Serial.print(float(loopits) * 1000.0 / float(time));
+		Serial.print("\t period (ms): ");
+		Serial.print(meanperiod);
+		Serial.print("std deviation: ");
+		Serial.print(sqrt(float(timesq) / float(loopits) - sq(meanperiod)));
+	}
+	loopits = 0;
+}
+
+void zeroMotors(){
+	for (int i=0; i<4; i++){
+		esc[i].write(30);
+	}
+}
+
+void resetIs(){
+	xPosControl.ResetITerm();
+	yPosControl.ResetITerm();
+	zPosControl.ResetITerm();
+	xVeloControl.ResetITerm();
+	yVeloControl.ResetITerm();
+	zVeloControl.ResetITerm();
+	vertControl.ResetITerm();
+}
+
+void updateGains(){
+	if(state.currentgain != currentgain ){
+//			Serial.println("state.currentgain");
+//			Serial.println(state.currentgain);
+		currentgain = state.currentgain;
+		switch(quanchar(state)){
+		case position:
+			switch(axischar(state)){
+			case x:
+				switch(pidchar(state)){
+				case p:
+					posPID.x.p = currentgain;
+					break;
+				case i:
+					posPID.x.i = currentgain;
+					break;
+				case d:
+					posPID.x.d = currentgain;
+					break;
+				}
+				break;
+			case y:
+				switch(pidchar(state)){
+				case p:
+					posPID.y.p = currentgain;
+					break;
+				case i:
+					posPID.y.i = currentgain;
+					break;
+				case d:
+					posPID.y.d = currentgain;
+					break;
+				}
+				break;
+			case z:
+				switch(pidchar(state)){
+				case p:
+					posPID.z.p = currentgain;
+					break;
+				case i:
+					posPID.z.i = currentgain;
+					break;
+				case d:
+					posPID.z.d = currentgain;
+					break;
+				}
+				break;
+			case vert:
+				switch(pidchar(state)){
+				case p:
+					posPID.vert.p = currentgain;
+					break;
+				case i:
+					posPID.vert.i = currentgain;
+					break;
+				case d:
+					posPID.vert.d = currentgain;
+					break;
+				}
+				break;
+			}
+			break;
+		case velocity:
+			switch(axischar(state)){
+			case x:
+				switch(pidchar(state)){
+				case p:
+					veloPID.x.p = currentgain;
+					break;
+				case i:
+					veloPID.x.i = currentgain;
+					break;
+				case d:
+					veloPID.x.d = currentgain;
+					break;
+				}
+				break;
+			case y:
+				switch(pidchar(state)){
+				case p:
+					veloPID.y.p = currentgain;
+					break;
+				case i:
+					veloPID.y.i = currentgain;
+					break;
+				case d:
+					veloPID.y.d = currentgain;
+					break;
+				}
+				break;
+			case z:
+				switch(pidchar(state)){
+				case p:
+					veloPID.z.p = currentgain;
+					break;
+				case i:
+					veloPID.z.i = currentgain;
+					break;
+				case d:
+					veloPID.z.d = currentgain;
+					break;
+				}
+				break;
+			}
+		}
+		setPID();
+	}
+}
+
+void updateControlVars(){
+	posPID.x.input = q.x;
+	posPID.y.input = q.y;
+	posPID.z.input = q.z;
+
+	posPID.vert.input = aaReal.z / 100;
+
+	posPID.vert.setpoint = state.vertaccelset;
+	posPID.x.setpoint = state.xset;
+	posPID.y.setpoint = state.yset;
+	posPID.z.setpoint = state.zset;
+
+	veloPID.x.setpoint = posPID.x.output;
+	veloPID.y.setpoint = posPID.y.output;
+	veloPID.z.setpoint = posPID.z.output;
+}
+
+void printDebugging(){
+	//		if(millis() > lasttime + 50){
+	//		//		Serial.print("x pid output: ");
+	////		Serial.print(xgyroout);
+	////		Serial.print("  x pid input: ");
+	//		Serial.println();
+	////			Serial.print(xVeloControl.GetLastInput());
+	////			Serial.print("\t");
+	////
+	////			Serial.print(yVeloControl.GetLastInput());
+	////			Serial.print("\t");
+	////			Serial.print(zVeloControl.GetLastInput());
+	////			Serial.print("\t");
+	////
+	//			Serial.print(posPID.x.input);
+	//			Serial.print("\t");
+	//
+	//			Serial.print(posPID.y.input);
+	//			Serial.print("\t");
+	//			Serial.print(posPID.z.input);
+	//			Serial.print("\t");
+	////			Serial.print(veloPID.x.setpoint);
+	////			Serial.print("\t");
+	////
+	////			Serial.print(veloPID.y.setpoint);
+	////			Serial.print("\t");
+	////			Serial.print(veloPID.z.setpoint);
+	////			Serial.print("\t");
+	////
+	//			//printgains(state);
+	////			Serial.print(vertaccelset);
+	//			Serial.println();
+	//			lasttime = millis();
+	////		Serial.println("state.currentgain");
+	////		Serial.println(state.currentgain);
+	////		Serial.println(currentgain);
+	//		}
+}
+
+void handleMPU(){
+	//Serial.print("mpuInterrupt = "); Serial.print(mpuInterrupt);
+	//Serial.print(". fifoCount = "); Serial.println(fifoCount);
+	mpuInterrupt = false;
+	mpuIntStatus = mpu.getIntStatus();
+
+	// get current FIFO count
+	fifoCount = mpu.getFIFOCount();
+
+	// check for overflow (this should never happen unless our code is too inefficient)
+	if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+		// reset so we can continue cleanly
+		mpu.resetFIFO();
+		Serial.println(F("FIFO overflow!"));
+
+	// otherwise, check for DMP data ready interrupt (this should happen frequently)
+	} else if (mpuIntStatus & 0x02) {
+		// wait for correct available data length, should be a VERY short wait
+		while (fifoCount < packetSize){
+			Serial.println("stuck in loop");
+			fifoCount = mpu.getFIFOCount();
+			Serial.println(fifoCount);
+		}
+		//Serial.println("mpuing");
+		//Serial.println(fifoCount);
+		// read a packet from FIFO
+		mpu.getFIFOBytes(fifoBuffer, packetSize);
+		mpu.dmpGetQuaternion(&q, fifoBuffer);
+//		mpu.dmpGetAccel(&aa, fifoBuffer);
+//		mpu.dmpGetGravity(&gravity, &q);
+//		mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+//		mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+		//mpu.dmpGetGyro(gyro, fifoBuffer);
+		// track FIFO count here in case there is > 1 packet available
+		// (this lets us immediately read more without waiting for an interrupt)
+		fifoCount -= packetSize;
+		//Serial.print("After mpu, expect fifoCount = "); Serial.print(fifoCount);
+		//Serial.print(", but mpu.getFIFOCount() = "); Serial.println(mpu.getFIFOCount());
+		}
+	if(fifoCount > packetSize){
+		mpuInterrupt = false;
+		mpu.resetFIFO();
+		fifoCount = 0;
+	}
+}
 
 void setup() {
+	posPID.x.p = 1; //.4//original 1.2 blue
+	posPID.x.i = 0;//0.05;//0.35; //1//.5 blue
+	posPID.x.d = 0;//.2; //.1//.5 blue
+	posPID.y.p = 0;//.4;//1.2 blue
+	posPID.y.i = 0; //.8 blue
+	posPID.y.d = 0;//0.2; // .3 blue
+	posPID.z.p = 0;
+	posPID.z.i = 0;
+	posPID.z.d = 0;
+	posPID.vert.p = 0;
+	posPID.vert.i = 0;
+	posPID.vert.d = 0;
+	veloPID.x.p = 1;
+	veloPID.x.i = 0;
+	veloPID.x.d = 0;
+	veloPID.y.p = 0;
+	veloPID.z.p = 0;
 	lasttime = millis();
   Serial.begin(57600);
   Serial.println(F("Setup"));
@@ -209,20 +581,29 @@ void setup() {
   mpu.setZGyroOffset(-13); //53
   mpu.setZAccelOffset(1000); // 1688 factory default for my test chip
 
-  xsetpoint = 0;
-  ysetpoint = 0;
-  zsetpoint = 0;
-  xControl.SetMode(AUTOMATIC);
-  yControl.SetMode(AUTOMATIC);
-  zControl.SetMode(AUTOMATIC);
+  posPID.x.setpoint = 0;
+  posPID.y.setpoint = 0;
+  posPID.z.setpoint = 0;
+  xPosControl.SetMode(AUTOMATIC);
+  yPosControl.SetMode(MANUAL);//AUTOMATIC);
+  zPosControl.SetMode(MANUAL);//AUTOMATIC);
+  xVeloControl.SetMode(AUTOMATIC);
+  yVeloControl.SetMode(AUTOMATIC);
+  zVeloControl.SetMode(AUTOMATIC);
   vertControl.SetMode(AUTOMATIC);
-  xControl.SetOutputLimits(-1,1);
-  yControl.SetOutputLimits(-1,1);
-  zControl.SetOutputLimits(-1,1);
+  xPosControl.SetOutputLimits(-1,1);
+  yPosControl.SetOutputLimits(-1,1);
+  zPosControl.SetOutputLimits(-1,1);
+  xVeloControl.SetOutputLimits(-1,1);
+  yVeloControl.SetOutputLimits(-1,1);
+  zVeloControl.SetOutputLimits(-1,1);
   vertControl.SetOutputLimits(-100,100);
-  xControl.SetSampleTime(sampTime);
-  yControl.SetSampleTime(sampTime);
-  zControl.SetSampleTime(sampTime);
+  xPosControl.SetSampleTime(sampTime);
+  yPosControl.SetSampleTime(sampTime);
+  zPosControl.SetSampleTime(sampTime);
+  xVeloControl.SetSampleTime(sampTime);
+  yVeloControl.SetSampleTime(sampTime);
+  zVeloControl.SetSampleTime(sampTime);
   vertControl.SetSampleTime(sampTime);
   for (int i=0; i<4; i++){
   				esc[i].write(30);
@@ -233,214 +614,22 @@ void setup() {
 void loop() {
 	while(!mpuInterrupt && fifoCount < packetSize){
 		if( radio.available()){
-																		// Variable for the received timestamp
-		  //while (radio.available()) {                                   // While there is data ready
-			//Serial.println("reading radio");
-			radio.read( &state, sizeof(ControlState) );             // Get the payload
-		  //}
-
-//		  radio.stopListening();                                        // First, stop listening so we can talk
-//		  radio.write( &state, sizeof(ControlState) );              // Send the final one back.
-//		  radio.startListening();                                       // Now, resume listening so we catch the next packets.
-//		  Serial.println(F("Sent response "));
-//		  Serial.print(state.axes[0]);
-//		  Serial.print(", ");
-//		  Serial.print(state.axes[1]);
-			//Serial.println(state.printDebug);
+			radio.read( &state, sizeof(ControlState) );
 			if(printDebugbool(state)){
-	//			for(int i=0; i<4;i++){
-	//				state.pwmset[i] = motorspeed[i];
-	//			}
-//				state.setretx = xsetpoint;
-//				state.setrety = ysetpoint;
-//				state.vertset = vertaccelset;
-				state.pwmoutx = xgyroout;
-				state.pwmouty = ygyroout;
-				state.pwmoutvert = vertaccelout;
-				Serial.println("still writing");
-				radio.stopListening();
-				radio.write(&state, sizeof(ControlState));
-				radio.startListening() ;
+				printDebugs();
 			}
 		}
-
-
-
-		//int throttle = map(state.vertaccelset, -100, 100, 30, 179);
-
-		vertaccelset = state.vertaccelset;
-		xsetpoint = state.xset;
-		ysetpoint = state.yset;
-		zsetpoint = state.zset;
-		gyroToMotor(vertaccelout, xgyroout, ygyroout, zgyroout, motorspeed); //vertaccelout
-
-
-		if(state.turnOn){ //millis() < 12000){
-			if(loopits == 0){
-				starttime = millis();
-			}
-			loopits++;
-//			Serial.println();
-//			for(int i= 0; i<4; i++){
-//				Serial.print(motorspeed[i]);
-//				Serial.print("\t");
-//			}
-//			Serial.println();
-			for (int i=0; i<4; i++){
-				esc[i].write(motorspeed[i]); //* motormultiplier[i]);
-			}
-			xControl.Compute();
-			yControl.Compute();
-			zControl.Compute();
-			vertControl.Compute();
+		if(state.turnOn){
+			calcIterTimes();
+			updateMotors();
 		}else{
-			if(loopits!= 0){
-				unsigned long time = millis() - starttime;
-				Serial.println();
-				Serial.print("Iterations: ");
-				Serial.print(loopits);
-				Serial.print("\t");
-				Serial.print("Time in ms: ");
-				Serial.print(time);
-				Serial.print("\t");
-				Serial.print("frequency (Hz): ");
-				Serial.print(float(loopits) * 1000.0 / float(time));
-				Serial.print("\t period (ms): ");
-				Serial.print(float(time) / float(loopits));
-			}
-			loopits = 0;
-			xControl.ResetITerm();
-			yControl.ResetITerm();
-			zControl.ResetITerm();
-			vertControl.ResetITerm();
-			for (int i=0; i<4; i++){
-				esc[i].write(30);
-			}
+			zeroMotors();
+			printIterTimes();
+			resetIs();
+			updateGains();
 		}
-		xgyroin = q.x;
-		ygyroin = q.y;
-		zgyroin = q.z;
-		vertaccelin = aaReal.z / 100;
-
-
-		if(millis() > lasttime + 50){
-		//		Serial.print("x pid output: ");
-//		Serial.print(xgyroout);
-//		Serial.print("  x pid input: ");
-//		Serial.println();
-//			Serial.print(xsetpoint);
-//			Serial.print("\t");
-//
-//			Serial.print(ysetpoint);
-//			Serial.print("\t");
-//			Serial.print(zsetpoint);
-//			Serial.print("\t");
-//
-//			Serial.print(vertaccelset);
-//			Serial.println();
-			lasttime = millis();
-//		Serial.println("state.currentgain");
-//		Serial.println(state.currentgain);
-//		Serial.println(currentgain);
-		}
-		if(state.currentgain != currentgain ){
-//			Serial.println("state.currentgain");
-//			Serial.println(state.currentgain);
-			currentgain = state.currentgain;
-			switch(axischar(state)){
-			case x:
-				switch(pidchar(state)){
-				case p:
-					px = currentgain;
-					break;
-				case i:
-					ix = currentgain;
-					break;
-				case d:
-					dx = currentgain;
-					break;
-				}
-				xControl.SetTunings(px,ix,dx);
-				break;
-			case y:
-				switch(pidchar(state)){
-				case p:
-					py = currentgain;
-					break;
-				case i:
-					iy = currentgain;
-					break;
-				case d:
-					dy = currentgain;
-					break;
-				}
-				yControl.SetTunings(py,iy,dy);
-				break;
-			case z:
-				switch(pidchar(state)){
-				case p:
-					pz = currentgain;
-					break;
-				case i:
-					iz = currentgain;
-					break;
-				case d:
-					dz = currentgain;
-					break;
-				}
-				zControl.SetTunings(pz,iz,dz);
-				break;
-			case vert:
-				switch(pidchar(state)){
-				case p:
-					pvert = currentgain;
-					break;
-				case i:
-					ivert = currentgain;
-					break;
-				case d:
-					dvert = currentgain;
-					break;
-				}
-				vertControl.SetTunings(pvert,ivert,dvert);
-				break;
-			}
-		}
-//		Serial.println();
-//		Serial.print("Kp");
-//		Serial.print(xControl.GetKp());
+		updateControlVars();
+		printDebugging();
 	}
-	mpuInterrupt = false;
-	mpuIntStatus = mpu.getIntStatus();
-
-	// get current FIFO count
-	fifoCount = mpu.getFIFOCount();
-
-	// check for overflow (this should never happen unless our code is too inefficient)
-	if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-		// reset so we can continue cleanly
-		mpu.resetFIFO();
-		Serial.println(F("FIFO overflow!"));
-
-	// otherwise, check for DMP data ready interrupt (this should happen frequently)
-	} else if (mpuIntStatus & 0x02) {
-		// wait for correct available data length, should be a VERY short wait
-		while (fifoCount < packetSize){
-			Serial.println("stuck in loop");
-			fifoCount = mpu.getFIFOCount();
-		}
-
-		// read a packet from FIFO
-		mpu.getFIFOBytes(fifoBuffer, packetSize);
-		mpu.dmpGetGyro(&gyro, fifoBuffer);
-		mpu.dmpGetQuaternion(&q, fifoBuffer);
-		mpu.dmpGetAccel(&aa, fifoBuffer);
-		mpu.dmpGetGravity(&gravity, &q);
-//		mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-		mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-		// track FIFO count here in case there is > 1 packet available
-		// (this lets us immediately read more without waiting for an interrupt)
-		fifoCount -= packetSize;
-	}
-
+	handleMPU();
 }

@@ -1,3 +1,5 @@
+#include "Arduino.h"
+
 #define printDebug B00000001
 #define xyzvmask   B00000110
 #define xcg        B00000000
@@ -8,6 +10,7 @@
 #define pcg        B00000000
 #define icg        B00001000
 #define dcg        B00010000
+#define quantity   B00100000 // 1 = position, 0 = velocity
 
 struct ControlState {
 	double xset;
@@ -26,33 +29,48 @@ struct ControlState {
 	double pwmoutvert;
 };
 
-struct axesPID{
+struct PIDStruct{
 	double p;
 	double i;
 	double d;
+	double input;
+	double output;
+	double setpoint;
 };
 
-struct PIDconsts{
-	axesPID x;
-	axesPID y;
-	axesPID z;
-	axesPID vert;
+struct PIDs{
+	PIDStruct x;
+	PIDStruct y;
+	PIDStruct z;
+	PIDStruct vert;
 };
 
 enum axes {
 	x,
 	y,
 	z,
-	vert,
-	barf2
+	vert
 };
 
 enum pid{
 	p,
 	i,
-	d,
-	barf
+	d
 };
+enum quantities{
+	position,
+	velocity
+};
+
+quantities quanchar(ControlState state){
+	return ((quantity & state.kitchensink) == quantity) ?  position : velocity;
+}
+
+void incrementquantity(ControlState &state){
+	bool value = ((state.kitchensink & quantity) == quantity);
+	state.kitchensink &= ~quantity;
+	state.kitchensink |= (value ? B0 : quantity);
+}
 
 axes axischar(ControlState state){
 	byte masked = xyzvmask & state.kitchensink;
@@ -65,8 +83,8 @@ axes axischar(ControlState state){
 		return z;
 	case vertcg:
 		return vert;
+	default: return x;
 	}
-	return barf2;
 }
 
 void incrementaxis(ControlState &state){
@@ -99,8 +117,8 @@ pid pidchar(ControlState state){
 		return i;
 	case dcg:
 		return d;
+	default: return p;
 	}
-	return barf;
 }
 
 bool printDebugbool(ControlState state){

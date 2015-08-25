@@ -190,11 +190,16 @@ int randRound(double x){
 // x axis runs from red to white with a positive value being a rotation towards motor 3 and 4
 // y axis runs from motor 1 and 2 side to motor 3 and 4 side, with a positive value being a rotation towards the motor 2 and 3 side.
 
-void gyroToMotor(double vaccel, double x, double y, double z, double motors[]){
-	motors[0] = vaccel / 100 + x + y + 0 * z;
-	motors[1] = vaccel / 100 + x - y - 0 * z;
-	motors[2] = vaccel / 100 - x - y + 0 * z;
-	motors[3] = vaccel / 100 - x + y - 0 * z;
+void torqueToMotorVelo(double vaccel, double tauX, double tauY, double tauZ, double motors[]){
+	/*
+	 * Input is torque about all three axes and vertical thrust, and outputs to motors array
+	 * constants based on matrix ainv in matrices.txt, which is inverse of matrix transformation
+	 * from motor velocity squared to torque
+	*/
+	motors[0] = -1 * 0.8694517 * tauX - 1 * tauY + 0.15910966 * tauZ + 0.172 * (vaccel / 100);
+	motors[1] = -1 * 0.8694517 * tauX + 1 * tauY - 0.17389034 * tauZ + 0.161 * (vaccel / 100);
+	motors[2] = 0.8694517 * tauX + 1 * tauY + 0.17389034 * tauZ + 0.161 * (vaccel / 100);
+	motors[3] = 0.8694517 * tauX - 1 * tauY - 0.15910966 * tauZ + 0.172 * (vaccel / 100);
 	for (int i=0; i<4; i++){
 		motors[i] = ((motors[i] > 1) ? 1 : ((motors[i] < -1) ? -1 : motors[i]));
 		motors[i] = randRound(hoversetpoint + motors[i] * (hoversetpoint - 30)); //scale

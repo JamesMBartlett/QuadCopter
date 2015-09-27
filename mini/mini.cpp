@@ -277,9 +277,9 @@ double getNewCurrentGain(ControlState state){
 }
 
 void setup() {
-	posPID.x.p = 1; //.4//original 1.2 blue
-	posPID.x.i = 0;//0.05;//0.35; //1//.5 blue
-	posPID.x.d = 0;//.2; //.1//.5 blue
+	veloPID.x.p = 3; //.4//original 1.2 blue
+	veloPID.x.i = 0;//0.05;//0.35; //1//.5 blue
+	veloPID.x.d = 4;//.2; //.1//.5 blue
 	posPID.y.p = 1;//.4;//1.2 blue
 	posPID.y.i = 0; //.8 blue
 	posPID.y.d = 0;//0.2; // .3 blue
@@ -290,14 +290,14 @@ void setup() {
 	posPID.vert.i = 0;
 	posPID.vert.d = 0;
 	veloPID.x.p = 1;
-	state.currentgain = veloPID.x.p;
+	state.currentgain = posPID.x.p;
 	state.turnOn = false;
 	state.vertaccelset = -20;
   Serial.begin(57600);
   Serial.println(F("Transmitter On"));
   radio.begin();
 
-  radio.setPALevel(RF24_PA_HIGH); //might turn up if need to at long range
+  radio.setPALevel(RF24_PA_LOW); //might turn up if need to at long range
 
   if(radioNumber){
     radio.openWritingPipe(addresses[1]);
@@ -395,6 +395,7 @@ void loop() {
 //    		Serial.print(state.axes[ind]);
 //    		Serial.println();
     	}else if (c == 'B') {//data being given about buttons
+    		setReset(state, false);
     		int ind = Serial.parseInt();
     		Serial.println("button value read from serial: ");
     		buttonpressed =  Serial.parseInt();
@@ -429,6 +430,8 @@ void loop() {
     			state.currentgain = getNewCurrentGain(state);
     		}else if((ind == 5 || ind == 7) && buttonpressed == 1){
     			cgincr *= ((ind==7)? 0.1 : 10);
+    		}else if((ind == 3) && buttonpressed == 1){
+    			setReset(state, true);
     		}
     	}else{
     		Serial.println("Unknown Character");

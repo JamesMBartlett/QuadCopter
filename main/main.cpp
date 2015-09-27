@@ -65,6 +65,11 @@ unsigned long timesq;
 unsigned long ltime;
 
 const int hoversetpoint = 105;
+const int escmaxin = 180;
+
+#define IXX 0.00367;
+#define IYY 0.00444;
+#define IZZ 0.00783;
 
 PID xPosControl(&posPID.x.input, &(posPID.x.output), &posPID.x.setpoint, posPID.x.p,posPID.x.i,posPID.x.d, DIRECT);
 PID yPosControl(&posPID.y.input, &posPID.y.output, &posPID.y.setpoint, posPID.y.p,posPID.y.i,posPID.y.d, DIRECT);
@@ -196,13 +201,16 @@ void torqueToMotorVelo(double vaccel, double tauX, double tauY, double tauZ, dou
 	 * constants based on matrix ainv in matrices.txt, which is inverse of matrix transformation
 	 * from motor velocity squared to torque
 	*/
-	motors[0] = -1 * 0.8694517 * tauX - 1 * tauY + 0.15910966 * tauZ + 0.172 * (vaccel / 100);
-	motors[1] = -1 * 0.8694517 * tauX + 1 * tauY - 0.17389034 * tauZ + 0.161 * (vaccel / 100);
-	motors[2] = 0.8694517 * tauX + 1 * tauY + 0.17389034 * tauZ + 0.161 * (vaccel / 100);
-	motors[3] = 0.8694517 * tauX - 1 * tauY - 0.15910966 * tauZ + 0.172 * (vaccel / 100);
+	tauX = tauX * IXX;
+	tauY = tauY * IYY;
+	tauZ = tauZ * IZZ;
+	motors[0] = 0.8694517 * tauX + tauY + 0.15910966 * tauZ + 0.172 * (vaccel / 100);
+	motors[1] = 0.8694517 * tauX - tauY - 0.17389034 * tauZ + 0.161 * (vaccel / 100);
+	motors[2] = -1 * 0.8694517 * tauX - tauY + 0.17389034 * tauZ + 0.161 * (vaccel / 100);
+	motors[3] = -1 * 0.8694517 * tauX + tauY - 0.15910966 * tauZ + 0.172 * (vaccel / 100);
 	for (int i=0; i<4; i++){
 		motors[i] = ((motors[i] > 1) ? 1 : ((motors[i] < -1) ? -1 : motors[i]));
-		motors[i] = randRound(hoversetpoint + motors[i] * (hoversetpoint - 30)); //scale
+		motors[i] = randRound(hoversetpoint + motors[i] * (escmaxin - hoversetpoint)); //scale
 	}
 
 }
@@ -228,7 +236,7 @@ void printDebugs(){
 	radio.startListening() ;
 }
 void updateMotors(){
-	gyroToMotor(posPID.vert.setpoint, veloPID.x.output, veloPID.y.output, veloPID.z.output, motorspeed);
+	torqueToMotorVelo(posPID.vert.setpoint, veloPID.x.output, veloPID.y.output, veloPID.z.output, motorspeed);
 	for (int i=0; i<4; i++){
 		esc[i].write(motorspeed[i]); //* motormultiplier[i]);
 	}
@@ -281,6 +289,85 @@ void resetIs(){
 	yVeloControl.ResetITerm();
 	zVeloControl.ResetITerm();
 	vertControl.ResetITerm();
+}
+
+void resetGyro(){
+	if(getReset(state)){
+		mpu.resetSensors();
+	}
+}
+
+void setupMPU(){
+	  Serial.println(F("Initializing I2C devices..."));
+	  mpu.initialize();
+
+	  // verify connection
+	  Serial.println(F("Testing device connections..."));
+	  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+
+	  // load and configure the DMP
+	  Serial.println(F("Initializing DMP..."));
+	  devStatus = mpu.dmpInitialize();
+
+	  // make sure it worked (returns 0 if so)
+	  if (devStatus == 0) {
+		  // turn on the DMP, now that it's ready
+		  Serial.println(F("Enabling DMP..."));
+		  mpu.setDMPEnabled(true);
+
+		  // enable Arduino interrupt detection
+		  Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+		  attachInterrupt(0, dmpDataReady, RISING);
+		  mpuIntStatus = mpu.getIntStatus();
+
+		  // set our DMP Ready flag so the main loop() function knows it's okay to use it
+		  Serial.println(F("DMP ready! Waiting for first interrupt..."));
+		  dmpReady = true;
+
+		  // get expected DMP packet size for later comparison
+		  packetSize = mpu.dmpGetFIFOPacketSize();
+	  } else {
+		  // ERROR!
+		  // 1 = initial memory load failed
+		  // 2 = DMP configuration updates failed
+		  // (if it's going to break, usually the code will be 1)
+		  Serial.print(F("DMP Initialization failed (code "));
+		  Serial.print(devStatus);
+		  Serial.println(F(")"));
+	  }
+
+	  // supply your own gyro offsets here, scaled for min sensitivity
+	  mpu.setXGyroOffset(105); //-407 1715
+	  mpu.setYGyroOffset(-60); //266
+	  mpu.setZGyroOffset(-13); //53
+	  mpu.setZAccelOffset(1000); // 1688 factory default for my test chip
+}
+
+void setupPIDs(){
+	  posPID.x.setpoint = 0;
+	  posPID.y.setpoint = 0;
+	  posPID.z.setpoint = 0;
+	  xPosControl.SetMode(AUTOMATIC);
+	  yPosControl.SetMode(MANUAL);//AUTOMATIC);
+	  zPosControl.SetMode(MANUAL);//AUTOMATIC);
+	  xVeloControl.SetMode(AUTOMATIC);
+	  yVeloControl.SetMode(AUTOMATIC);
+	  zVeloControl.SetMode(AUTOMATIC);
+	  vertControl.SetMode(AUTOMATIC);
+	  xPosControl.SetOutputLimits(-1,1);
+	  yPosControl.SetOutputLimits(-1,1);
+	  zPosControl.SetOutputLimits(-1,1);
+	  xVeloControl.SetOutputLimits(-1,1);
+	  yVeloControl.SetOutputLimits(-1,1);
+	  zVeloControl.SetOutputLimits(-1,1);
+	  vertControl.SetOutputLimits(-100,100);
+	  xPosControl.SetSampleTime(sampTime);
+	  yPosControl.SetSampleTime(sampTime);
+	  zPosControl.SetSampleTime(sampTime);
+	  xVeloControl.SetSampleTime(sampTime);
+	  yVeloControl.SetSampleTime(sampTime);
+	  zVeloControl.SetSampleTime(sampTime);
+	  vertControl.SetSampleTime(sampTime);
 }
 
 void updateGains(){
@@ -404,24 +491,23 @@ void updateControlVars(){
 	posPID.y.setpoint = state.yset;
 	posPID.z.setpoint = state.zset;
 
-	veloPID.x.setpoint = posPID.x.output;
-	veloPID.y.setpoint = posPID.y.output;
-	veloPID.z.setpoint = posPID.z.output;
+	veloPID.x.setpoint = posPID.x.setpoint;//posPID.x.output;
+	veloPID.y.setpoint = posPID.y.setpoint;//posPID.y.output;
+	veloPID.z.setpoint = posPID.z.setpoint;//posPID.z.output;
 }
 
 void printDebugging(){
-	//		if(millis() > lasttime + 50){
-	//		//		Serial.print("x pid output: ");
-	////		Serial.print(xgyroout);
+	if(millis() > lasttime + 50){
+	//	Serial.print("x pid output: ");
+	//	Serial.println(q.x);
 	////		Serial.print("  x pid input: ");
-	//		Serial.println();
-	////			Serial.print(xVeloControl.GetLastInput());
-	////			Serial.print("\t");
-	////
-	////			Serial.print(yVeloControl.GetLastInput());
-	////			Serial.print("\t");
-	////			Serial.print(zVeloControl.GetLastInput());
-	////			Serial.print("\t");
+//		Serial.println();
+//		Serial.print(xVeloControl.GetLastInput());
+//		Serial.print("\t");
+//		Serial.print(yVeloControl.GetLastInput());
+//		Serial.print("\t");
+//		Serial.print(zVeloControl.GetLastInput());
+//		Serial.print("\t");
 	////
 	//			Serial.print(posPID.x.input);
 	//			Serial.print("\t");
@@ -445,7 +531,7 @@ void printDebugging(){
 	////		Serial.println("state.currentgain");
 	////		Serial.println(state.currentgain);
 	////		Serial.println(currentgain);
-	//		}
+	}
 }
 
 void handleMPU(){
@@ -517,7 +603,7 @@ void setup() {
   Serial.println(F("Setup"));
 
   radio.begin();
-  radio.setPALevel(RF24_PA_HIGH); // might want to change this later
+  radio.setPALevel(RF24_PA_LOW); // might want to change this later
 
 
   if(radioNumber){
@@ -542,74 +628,9 @@ void setup() {
 	  Fastwire::setup(400, true);
   #endif
 
-  Serial.println(F("Initializing I2C devices..."));
-  mpu.initialize();
+  setupMPU();
+  setupPIDs();
 
-  // verify connection
-  Serial.println(F("Testing device connections..."));
-  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-
-  // load and configure the DMP
-  Serial.println(F("Initializing DMP..."));
-  devStatus = mpu.dmpInitialize();
-
-  // make sure it worked (returns 0 if so)
-  if (devStatus == 0) {
-	  // turn on the DMP, now that it's ready
-	  Serial.println(F("Enabling DMP..."));
-	  mpu.setDMPEnabled(true);
-
-	  // enable Arduino interrupt detection
-	  Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
-	  attachInterrupt(0, dmpDataReady, RISING);
-	  mpuIntStatus = mpu.getIntStatus();
-
-	  // set our DMP Ready flag so the main loop() function knows it's okay to use it
-	  Serial.println(F("DMP ready! Waiting for first interrupt..."));
-	  dmpReady = true;
-
-	  // get expected DMP packet size for later comparison
-	  packetSize = mpu.dmpGetFIFOPacketSize();
-  } else {
-	  // ERROR!
-	  // 1 = initial memory load failed
-	  // 2 = DMP configuration updates failed
-	  // (if it's going to break, usually the code will be 1)
-	  Serial.print(F("DMP Initialization failed (code "));
-	  Serial.print(devStatus);
-	  Serial.println(F(")"));
-  }
-
-  // supply your own gyro offsets here, scaled for min sensitivity
-  mpu.setXGyroOffset(105); //-407 1715
-  mpu.setYGyroOffset(-60); //266
-  mpu.setZGyroOffset(-13); //53
-  mpu.setZAccelOffset(1000); // 1688 factory default for my test chip
-
-  posPID.x.setpoint = 0;
-  posPID.y.setpoint = 0;
-  posPID.z.setpoint = 0;
-  xPosControl.SetMode(AUTOMATIC);
-  yPosControl.SetMode(MANUAL);//AUTOMATIC);
-  zPosControl.SetMode(MANUAL);//AUTOMATIC);
-  xVeloControl.SetMode(AUTOMATIC);
-  yVeloControl.SetMode(AUTOMATIC);
-  zVeloControl.SetMode(AUTOMATIC);
-  vertControl.SetMode(AUTOMATIC);
-  xPosControl.SetOutputLimits(-1,1);
-  yPosControl.SetOutputLimits(-1,1);
-  zPosControl.SetOutputLimits(-1,1);
-  xVeloControl.SetOutputLimits(-1,1);
-  yVeloControl.SetOutputLimits(-1,1);
-  zVeloControl.SetOutputLimits(-1,1);
-  vertControl.SetOutputLimits(-100,100);
-  xPosControl.SetSampleTime(sampTime);
-  yPosControl.SetSampleTime(sampTime);
-  zPosControl.SetSampleTime(sampTime);
-  xVeloControl.SetSampleTime(sampTime);
-  yVeloControl.SetSampleTime(sampTime);
-  zVeloControl.SetSampleTime(sampTime);
-  vertControl.SetSampleTime(sampTime);
   for (int i=0; i<4; i++){
   				esc[i].write(30);
   }
@@ -621,7 +642,7 @@ void loop() {
 		if( radio.available()){
 			radio.read( &state, sizeof(ControlState) );
 			if(printDebugbool(state)){
-				printDebugs();
+				//printDebugs();
 			}
 		}
 		if(state.turnOn){
@@ -632,6 +653,7 @@ void loop() {
 			printIterTimes();
 			resetIs();
 			updateGains();
+			resetGyro();
 		}
 		updateControlVars();
 		printDebugging();

@@ -29,7 +29,7 @@ class JoyThread(threading.Thread):
     self.axes = [ 0.0 ] * self.stick.get_numaxes()
     self.buttons = [False] * self.stick.get_numbuttons()
 
-    self.importantButtons = [4,5,6,7,10,11,12,13,14,15]
+    self.importantButtons = [3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15]
     self.importantAxes = [0, 1, 2, 3]
 
   def run(self):

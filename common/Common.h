@@ -11,6 +11,7 @@
 #define icg        B00001000
 #define dcg        B00010000
 #define quantity   B00100000 // 1 = position, 0 = velocity
+#define RESET	   B01000000
 
 struct ControlState {
 	double xset;
@@ -106,6 +107,13 @@ void incrementpid(ControlState &state){
 }
 void setprintDebug(ControlState &state, bool value){
 	state.kitchensink |= (value ? printDebug : B0);
+}
+
+void setReset(ControlState &state, bool value){
+	state.kitchensink |= (value ? RESET : B0);
+}
+bool getReset(ControlState &state){
+	return (RESET & state.kitchensink) == RESET;
 }
 
 pid pidchar(ControlState state){
